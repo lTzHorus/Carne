@@ -35,11 +35,7 @@ def get_mongo_client():
         return None
 
 client = get_mongo_client()
-if client:
-    db = client.get_database(MONGO_DB_NAME)
-    print(f"Conectado ao MongoDB! Banco: {db.name}")
-else:
-    db = None
+db = client.get_database(MONGO_DB_NAME) if client else None
 
 # Funções auxiliares
 def validate_payment_data(data, partial_update=False):
@@ -64,7 +60,7 @@ def validate_payment_data(data, partial_update=False):
 # Rotas da API
 @app.route('/api/payments', methods=['GET'])
 def get_payments():
-    if not db:
+    if db is None:
         return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
     
     try:
@@ -88,7 +84,7 @@ def get_payments():
 
 @app.route('/api/payments', methods=['POST'])
 def add_payment():
-    if not db:
+    if db is None:
         return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
         
     try:
@@ -124,7 +120,7 @@ def add_payment():
 
 @app.route('/api/payments/<payment_id>/pay', methods=['PUT'])
 def mark_as_paid(payment_id):
-    if not db:
+    if db is None:
         return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
         
     try:
@@ -155,7 +151,7 @@ def mark_as_paid(payment_id):
 
 @app.route('/api/payments/<payment_id>', methods=['PUT'])
 def update_payment(payment_id):
-    if not db:
+    if db is None:
         return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
         
     try:
@@ -200,7 +196,7 @@ def update_payment(payment_id):
 
 @app.route('/api/payments/<payment_id>', methods=['DELETE'])
 def delete_payment(payment_id):
-    if not db:
+    if db is None:
         return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
         
     try:
