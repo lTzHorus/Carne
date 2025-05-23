@@ -32,6 +32,36 @@
         .status-pending { background-color: #FFC107; color: black; }
         .status-overdue { background-color: #F44336; }
         .loading { display: none; margin: 20px 0; }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 15% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 500px;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .close:hover {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -59,12 +89,17 @@
     </form>
     
     <h2>Parcelas</h2>
-    <button id="refreshBtn" class="btn-secondary">Atualizar Lista</button>
+    <div class="filters">
+        <button id="allBtn" class="btn-secondary">Todas</button>
+        <button id="pendingBtn" class="btn-secondary">Pendentes</button>
+        <button id="paidBtn" class="btn-secondary">Pagas</button>
+        <button id="overdueBtn" class="btn-secondary">Vencidas</button>
+        <button id="refreshBtn" class="btn-secondary">Atualizar</button>
+    </div>
     <div id="loading" class="loading">Carregando...</div>
     <table id="paymentsTable">
         <thead>
             <tr>
-                <th>ID</th>
                 <th>Descrição</th>
                 <th>Valor</th>
                 <th>Vencimento</th>
@@ -77,11 +112,38 @@
         <tbody></tbody>
     </table>
 
+    <!-- Modal de Edição -->
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Editar Parcela</h2>
+            <form id="editForm">
+                <input type="hidden" id="editId">
+                <div class="form-group">
+                    <label for="editDescription">Descrição:</label>
+                    <input type="text" id="editDescription" required>
+                </div>
+                <div class="form-group">
+                    <label for="editValue">Valor:</label>
+                    <input type="number" id="editValue" step="0.01" min="0.01" required>
+                </div>
+                <div class="form-group">
+                    <label for="editDueDate">Data de Vencimento:</label>
+                    <input type="date" id="editDueDate" required>
+                </div>
+                <div class="form-group">
+                    <label for="editPayer">Pagador:</label>
+                    <input type="text" id="editPayer" required>
+                </div>
+                <button type="submit" class="btn-primary">Salvar Alterações</button>
+            </form>
+        </div>
+    </div>
+
     <script>
         // URL base da API - ajuste para sua URL do Render
-        const API_BASE_URL = window.location.hostname === 'localhost' 
-            ? 'http://localhost:5000/api' 
-            : '/api';
+        const API_BASE_URL = window.location.origin + '/api';
+        let currentFilter = 'all';
 
         document.addEventListener('DOMContentLoaded', () => {
             fetchPayments();
@@ -91,18 +153,45 @@
                 addPayment();
             });
             
-            document.getElementById('refreshBtn').addEventListener('click', fetchPayments);
+            document.getElementById('refreshBtn').addEventListener('click', () => fetchPayments(currentFilter));
+            document.getElementById('allBtn').addEventListener('click', () => fetchPayments('all'));
+            document.getElementById('pendingBtn').addEventListener('click', () => fetchPayments('pending'));
+            document.getElementById('paidBtn').addEventListener('click', () => fetchPayments('paid'));
+            document.getElementById('overdueBtn').addEventListener('click', () => fetchPayments('overdue'));
+            
+            // Modal handlers
+            const modal = document.getElementById('editModal');
+            const span = document.getElementsByClassName('close')[0];
+            
+            span.onclick = function() {
+                modal.style.display = 'none';
+            }
+            
+            window.onclick = function(event) {
+                if (event.target == modal) {
+                    modal.style.display = 'none';
+                }
+            }
+            
+            document.getElementById('editForm').addEventListener('submit', (e) => {
+                e.preventDefault();
+                updatePayment();
+            });
         });
 
-        // Mostra/oculta loading
         function toggleLoading(show) {
             document.getElementById('loading').style.display = show ? 'block' : 'none';
         }
 
-        async function fetchPayments() {
+        async function fetchPayments(filter = 'all') {
+            currentFilter = filter;
             toggleLoading(true);
             try {
-                const response = await fetch(`${API_BASE_URL}/payments`);
+                const url = filter === 'all' 
+                    ? `${API_BASE_URL}/payments` 
+                    : `${API_BASE_URL}/payments?status=${filter}`;
+                
+                const response = await fetch(url);
                 if (!response.ok) {
                     throw new Error(`Erro HTTP: ${response.status}`);
                 }
@@ -112,7 +201,7 @@
                 tbody.innerHTML = '';
                 
                 if (payments.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="8">Nenhuma parcela encontrada</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7">Nenhuma parcela encontrada</td></tr>';
                     return;
                 }
                 
@@ -134,7 +223,6 @@
                     }
                     
                     row.innerHTML = `
-                        <td>${payment._id?.$oid || payment._id || 'N/A'}</td>
                         <td>${payment.description || 'N/A'}</td>
                         <td>R$ ${payment.value?.toFixed(2) || '0,00'}</td>
                         <td>${dueDate.toLocaleDateString('pt-BR')}</td>
@@ -143,9 +231,9 @@
                         <td>${payment.paymentDate ? new Date(payment.paymentDate).toLocaleDateString('pt-BR') : '-'}</td>
                         <td>
                             ${!payment.paid ? 
-                                `<button class="btn-primary" onclick="markAsPaid('${payment._id?.$oid || payment._id}')">Marcar como Pago</button>` : 
+                                `<button class="btn-primary" onclick="markAsPaid('${payment._id?.$oid || payment._id}')">Pagar</button>` : 
                                 ''}
-                            <button class="btn-secondary" onclick="editPayment('${payment._id?.$oid || payment._id}')">Editar</button>
+                            <button class="btn-secondary" onclick="openEditModal('${payment._id?.$oid || payment._id}')">Editar</button>
                             <button class="btn-danger" onclick="deletePayment('${payment._id?.$oid || payment._id}')">Excluir</button>
                         </td>
                     `;
@@ -180,8 +268,7 @@
                         description, 
                         value, 
                         dueDate, 
-                        payer,
-                        paid: false
+                        payer
                     })
                 });
                 
@@ -193,7 +280,7 @@
                 const result = await response.json();
                 alert('Parcela adicionada com sucesso!');
                 document.getElementById('addForm').reset();
-                fetchPayments();
+                fetchPayments(currentFilter);
             } catch (error) {
                 console.error('Erro ao adicionar parcela:', error);
                 alert('Erro ao adicionar parcela: ' + error.message);
@@ -218,18 +305,51 @@
                 
                 const result = await response.json();
                 alert('Parcela marcada como paga com sucesso!');
-                fetchPayments();
+                fetchPayments(currentFilter);
             } catch (error) {
                 console.error('Erro ao marcar como pago:', error);
                 alert('Erro ao marcar como pago: ' + error.message);
             }
         }
 
-        async function editPayment(id) {
+        async function openEditModal(id) {
             if (!id) return;
             
-            const newValue = prompt('Digite o novo valor:');
-            if (newValue === null || isNaN(parseFloat(newValue))) return;
+            try {
+                const response = await fetch(`${API_BASE_URL}/payments/${id}`);
+                if (!response.ok) {
+                    throw new Error('Erro ao carregar dados da parcela');
+                }
+                
+                const payment = await response.json();
+                document.getElementById('editId').value = id;
+                document.getElementById('editDescription').value = payment.description || '';
+                document.getElementById('editValue').value = payment.value || '';
+                document.getElementById('editPayer').value = payment.payer || '';
+                
+                // Formata a data para o input type="date"
+                const dueDate = new Date(payment.dueDate);
+                const formattedDate = dueDate.toISOString().split('T')[0];
+                document.getElementById('editDueDate').value = formattedDate;
+                
+                document.getElementById('editModal').style.display = 'block';
+            } catch (error) {
+                console.error('Erro ao abrir modal de edição:', error);
+                alert('Erro ao carregar dados da parcela: ' + error.message);
+            }
+        }
+
+        async function updatePayment() {
+            const id = document.getElementById('editId').value;
+            const description = document.getElementById('editDescription').value.trim();
+            const value = parseFloat(document.getElementById('editValue').value);
+            const dueDate = document.getElementById('editDueDate').value;
+            const payer = document.getElementById('editPayer').value.trim();
+            
+            if (!id || !description || !value || !dueDate || !payer) {
+                alert('Preencha todos os campos obrigatórios!');
+                return;
+            }
             
             try {
                 const response = await fetch(`${API_BASE_URL}/payments/${id}`, {
@@ -237,20 +357,26 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ value: parseFloat(newValue) })
+                    body: JSON.stringify({ 
+                        description,
+                        value,
+                        dueDate,
+                        payer
+                    })
                 });
                 
                 if (!response.ok) {
                     const errorData = await response.json();
-                    throw new Error(errorData.error || 'Erro ao editar parcela');
+                    throw new Error(errorData.error || 'Erro ao atualizar parcela');
                 }
                 
                 const result = await response.json();
                 alert('Parcela atualizada com sucesso!');
-                fetchPayments();
+                document.getElementById('editModal').style.display = 'none';
+                fetchPayments(currentFilter);
             } catch (error) {
-                console.error('Erro ao editar parcela:', error);
-                alert('Erro ao editar parcela: ' + error.message);
+                console.error('Erro ao atualizar parcela:', error);
+                alert('Erro ao atualizar parcela: ' + error.message);
             }
         }
 
@@ -269,7 +395,7 @@
                 
                 const result = await response.json();
                 alert('Parcela excluída com sucesso!');
-                fetchPayments();
+                fetchPayments(currentFilter);
             } catch (error) {
                 console.error('Erro ao excluir parcela:', error);
                 alert('Erro ao excluir parcela: ' + error.message);
