@@ -6,206 +6,226 @@ from bson.objectid import ObjectId
 from datetime import datetime
 import os
 from dotenv import load_dotenv
-import logging
 
 # Carrega variáveis do arquivo .env
 load_dotenv()
 
-# Configuração do Flask
 app = Flask(__name__, static_folder='.', static_url_path='')
 
-# Configuração do logger
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
-
-# Configuração do CORS para produção
+# Configuração do CORS
 CORS(app, resources={
     r"/api/*": {
-        "origins": [
-            "https://seu-app.onrender.com",
-            "http://localhost:*",
-            "https://*",
-            "http://*"
-        ],
+        "origins": os.getenv('ALLOWED_ORIGINS', '*').split(','),
         "methods": ["GET", "POST", "PUT", "DELETE"],
-        "allow_headers": ["*"]
+        "allow_headers": ["Content-Type"],
+        "supports_credentials": True
     }
 })
 
-# Configuração segura da conexão MongoDB
-MONGO_URI = os.getenv("MONGO_URI") + "?retryWrites=true&w=majority&tls=true&tlsAllowInvalidCertificates=true"
-if not MONGO_URI:
-    raise ValueError("No MONGO_URI set for MongoDB connection")
+# Configuração do MongoDB
+def get_mongo_client():
+    MONGO_URI = os.getenv("MONGO_URI")
+    if not MONGO_URI:
+        raise ValueError("Variável MONGO_URI não configurada")
+    
+    return MongoClient(
+        MONGO_URI,
+        tls=True,
+        tlsAllowInvalidCertificates=True,
+        connectTimeoutMS=30000,
+        socketTimeoutMS=30000,
+        serverSelectionTimeoutMS=30000,
+        retryWrites=True,
+        w="majority"
+    )
 
-# Conexão com o MongoDB
 try:
-    client = MongoClient(MONGO_URI)
-    # Testa a conexão
-    client.admin.command('ping')
-    db = client.get_default_database()
-    logger.info(f"Conectado ao MongoDB Atlas! Banco: {db.name}")
+    client = get_mongo_client()
+    client.admin.command('ping')  # Testa a conexão
+    db = client.get_database(os.getenv('MONGO_DB_NAME', 'carne_astra'))
+    print(f"Conectado ao MongoDB! Banco: {db.name}")
 except Exception as e:
-    logger.error(f"Erro ao conectar ao MongoDB: {e}")
+    print(f"Erro ao conectar ao MongoDB: {str(e)}")
     db = None
 
-# Rota para recuperar os pagamentos
+# Helper functions
+def validate_payment_data(data, partial_update=False):
+    required_fields = ['description', 'value', 'dueDate', 'payer'] if not partial_update else []
+    errors = {}
+    
+    for field in required_fields:
+        if field not in data or not data[field]:
+            errors[field] = "Campo obrigatório"
+    
+    if 'value' in data and (not isinstance(data['value'], (int, float)) or data['value'] <= 0):
+        errors['value'] = "Valor deve ser um número positivo"
+    
+    if 'dueDate' in data:
+        try:
+            datetime.strptime(data['dueDate'], "%Y-%m-%d")
+        except ValueError:
+            errors['dueDate'] = "Formato de data inválido (use YYYY-MM-DD)"
+    
+    return errors if errors else None
+
+# Rotas da API
 @app.route('/api/payments', methods=['GET'])
 def get_payments():
-    if db is None:
-        logger.error("Falha na conexão com o banco de dados")
-        return jsonify({"error": "Database connection failed"}), 500
+    if not db:
+        return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
     
     try:
-        payments = list(db.payments.find().sort("dueDate", 1))
-        logger.info(f"Recuperados {len(payments)} pagamentos")
+        status_filter = request.args.get('status')
+        query = {}
+        
+        if status_filter == 'paid':
+            query['paid'] = True
+        elif status_filter == 'pending':
+            query['paid'] = False
+            query['dueDate'] = {'$gte': datetime.now()}
+        elif status_filter == 'overdue':
+            query['paid'] = False
+            query['dueDate'] = {'$lt': datetime.now()}
+        
+        payments = list(db.payments.find(query).sort("dueDate", 1))
         return dumps(payments)
     except Exception as e:
-        logger.error(f"Erro ao recuperar pagamentos: {e}")
-        return jsonify({"error": "Erro ao recuperar pagamentos"}), 500
+        app.logger.error(f"Erro ao buscar pagamentos: {str(e)}")
+        return jsonify({"error": "Erro interno ao processar a requisição"}), 500
 
-# Rota para adicionar um pagamento
 @app.route('/api/payments', methods=['POST'])
 def add_payment():
-    if db is None:
-        logger.error("Falha na conexão com o banco de dados")
-        return jsonify({"error": "Database connection failed"}), 500
+    if not db:
+        return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
         
     try:
         data = request.get_json()
         if not data:
-            logger.warning("Nenhum dado fornecido na requisição")
-            return jsonify({"error": "No data provided"}), 400
-            
-        required_fields = ['description', 'value', 'dueDate', 'payer']
-        for field in required_fields:
-            if field not in data:
-                logger.warning(f"Campo ausente: {field}")
-                return jsonify({"error": f"Missing required field: {field}"}), 400
+            return jsonify({"error": "Dados não fornecidos"}), 400
         
-        data['dueDate'] = datetime.strptime(data['dueDate'], "%Y-%m-%d")
-        data['paid'] = False
-        data['paymentDate'] = None
+        if errors := validate_payment_data(data):
+            return jsonify({"error": "Dados inválidos", "details": errors}), 400
         
-        result = db.payments.insert_one(data)
-        logger.info(f"Pagamento inserido com sucesso. ID: {result.inserted_id}")
+        payment_data = {
+            "description": data['description'],
+            "value": float(data['value']),
+            "dueDate": datetime.strptime(data['dueDate'], "%Y-%m-%d"),
+            "payer": data['payer'],
+            "paid": False,
+            "paymentDate": None,
+            "createdAt": datetime.now(),
+            "updatedAt": datetime.now()
+        }
+        
+        result = db.payments.insert_one(payment_data)
         return jsonify({
             "success": True,
             "id": str(result.inserted_id),
-            "message": "Payment added successfully"
-        })
+            "message": "Parcela adicionada com sucesso"
+        }), 201
     except ValueError as e:
-        logger.error(f"Erro no formato da data: {e}")
-        return jsonify({"error": f"Invalid date format. Use YYYY-MM-DD: {str(e)}"}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error(f"Erro ao adicionar pagamento: {e}")
-        return jsonify({"error": str(e)}), 500
+        app.logger.error(f"Erro ao adicionar parcela: {str(e)}")
+        return jsonify({"error": "Erro interno ao processar a requisição"}), 500
 
-# Rota para marcar um pagamento como pago
 @app.route('/api/payments/<payment_id>/pay', methods=['PUT'])
 def mark_as_paid(payment_id):
-    if db is None:
-        logger.error("Falha na conexão com o banco de dados")
-        return jsonify({"error": "Database connection failed"}), 500
+    if not db:
+        return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
         
     try:
         if not ObjectId.is_valid(payment_id):
-            logger.warning(f"ID de pagamento inválido: {payment_id}")
-            return jsonify({"error": "Invalid payment ID"}), 400
+            return jsonify({"error": "ID de parcela inválido"}), 400
             
         result = db.payments.update_one(
             {"_id": ObjectId(payment_id)},
             {
                 "$set": {
                     "paid": True,
-                    "paymentDate": datetime.now()
+                    "paymentDate": datetime.now(),
+                    "updatedAt": datetime.now()
                 }
             }
         )
         
         if result.modified_count == 0:
-            logger.warning(f"Pagamento não encontrado ou já pago: {payment_id}")
-            return jsonify({"error": "Payment not found or already paid"}), 404
+            return jsonify({"error": "Parcela não encontrada ou já está paga"}), 404
             
-        logger.info(f"Pagamento {payment_id} marcado como pago")
         return jsonify({
             "success": True,
-            "message": "Payment marked as paid"
+            "message": "Parcela marcada como paga com sucesso"
         })
     except Exception as e:
-        logger.error(f"Erro ao marcar pagamento como pago: {e}")
-        return jsonify({"error": str(e)}), 500
+        app.logger.error(f"Erro ao marcar como pago: {str(e)}")
+        return jsonify({"error": "Erro interno ao processar a requisição"}), 500
 
-# Rota para atualizar o pagamento
 @app.route('/api/payments/<payment_id>', methods=['PUT'])
 def update_payment(payment_id):
-    if db is None:
-        logger.error("Falha na conexão com o banco de dados")
-        return jsonify({"error": "Database connection failed"}), 500
+    if not db:
+        return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
         
     try:
         if not ObjectId.is_valid(payment_id):
-            logger.warning(f"ID de pagamento inválido: {payment_id}")
-            return jsonify({"error": "Invalid payment ID"}), 400
+            return jsonify({"error": "ID de parcela inválido"}), 400
             
         data = request.get_json()
         if not data:
-            logger.warning("Nenhum dado fornecido na requisição para atualizar")
-            return jsonify({"error": "No data provided"}), 400
-            
-        data.pop('_id', None)
-        data.pop('paid', None)
-        data.pop('paymentDate', None)
+            return jsonify({"error": "Dados não fornecidos"}), 400
         
+        if errors := validate_payment_data(data, partial_update=True):
+            return jsonify({"error": "Dados inválidos", "details": errors}), 400
+        
+        update_data = {"$set": {"updatedAt": datetime.now()}}
+        
+        if 'description' in data:
+            update_data['$set']['description'] = data['description']
+        if 'value' in data:
+            update_data['$set']['value'] = float(data['value'])
         if 'dueDate' in data:
-            data['dueDate'] = datetime.strptime(data['dueDate'], "%Y-%m-%d")
+            update_data['$set']['dueDate'] = datetime.strptime(data['dueDate'], "%Y-%m-%d")
+        if 'payer' in data:
+            update_data['$set']['payer'] = data['payer']
         
         result = db.payments.update_one(
             {"_id": ObjectId(payment_id)},
-            {"$set": data}
+            update_data
         )
         
         if result.modified_count == 0:
-            logger.warning(f"Pagamento não encontrado ou nenhuma alteração feita: {payment_id}")
-            return jsonify({"error": "Payment not found or no changes made"}), 404
+            return jsonify({"error": "Parcela não encontrada ou nenhuma alteração feita"}), 404
             
-        logger.info(f"Pagamento {payment_id} atualizado com sucesso")
         return jsonify({
             "success": True,
-            "message": "Payment updated successfully"
+            "message": "Parcela atualizada com sucesso"
         })
     except ValueError as e:
-        logger.error(f"Erro no formato da data: {e}")
-        return jsonify({"error": f"Invalid date format. Use YYYY-MM-DD: {str(e)}"}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error(f"Erro ao atualizar pagamento: {e}")
-        return jsonify({"error": str(e)}), 500
+        app.logger.error(f"Erro ao atualizar parcela: {str(e)}")
+        return jsonify({"error": "Erro interno ao processar a requisição"}), 500
 
-# Rota para deletar o pagamento
 @app.route('/api/payments/<payment_id>', methods=['DELETE'])
 def delete_payment(payment_id):
-    if db is None:
-        logger.error("Falha na conexão com o banco de dados")
-        return jsonify({"error": "Database connection failed"}), 500
+    if not db:
+        return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
         
     try:
         if not ObjectId.is_valid(payment_id):
-            logger.warning(f"ID de pagamento inválido: {payment_id}")
-            return jsonify({"error": "Invalid payment ID"}), 400
+            return jsonify({"error": "ID de parcela inválido"}), 400
             
         result = db.payments.delete_one({"_id": ObjectId(payment_id)})
         
         if result.deleted_count == 0:
-            logger.warning(f"Pagamento não encontrado: {payment_id}")
-            return jsonify({"error": "Payment not found"}), 404
+            return jsonify({"error": "Parcela não encontrada"}), 404
             
-        logger.info(f"Pagamento {payment_id} deletado com sucesso")
         return jsonify({
             "success": True,
-            "message": "Payment deleted successfully"
+            "message": "Parcela excluída com sucesso"
         })
     except Exception as e:
-        logger.error(f"Erro ao deletar pagamento: {e}")
-        return jsonify({"error": str(e)}), 500
+        app.logger.error(f"Erro ao excluir parcela: {str(e)}")
+        return jsonify({"error": "Erro interno ao processar a requisição"}), 500
 
 # Rotas para servir o frontend
 @app.route('/')
@@ -216,7 +236,12 @@ def serve_frontend():
 def serve_static(path):
     return send_from_directory('.', path)
 
+# Health check
+@app.route('/health')
+def health_check():
+    return jsonify({"status": "healthy"}), 200
+
 # Configuração do servidor para produção
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true')
