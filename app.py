@@ -1,45 +1,54 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from pymongo import MongoClient
 from bson.json_util import dumps
 from bson.objectid import ObjectId
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
 from dotenv import load_dotenv
 
 # Carrega variáveis do arquivo .env
 load_dotenv()
 
-app = Flask(__name__)
-CORS(app)
+app = Flask(__name__, static_folder='.', static_url_path='')
 
-# Configuração segura da conexão (use variáveis de ambiente)
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://leoimarques:nT8QO2rCaps1RzwL@cluster0.ji1shyl.mongodb.net/carne_astra?retryWrites=true&w=majority&appName=Cluster0")
+# Configuração do CORS para produção
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "http://localhost:*",
+            "https://*.onrender.com"
+        ]
+    }
+})
+
+# Configuração segura da conexão MongoDB
+MONGO_URI = os.getenv("MONGO_URI")
+if not MONGO_URI:
+    raise ValueError("No MONGO_URI set for MongoDB connection")
 
 try:
     client = MongoClient(MONGO_URI)
     # Testa a conexão
     client.admin.command('ping')
-    db = client.get_default_database()  # Pega o banco da URI
+    db = client.get_default_database()
     print(f"Conectado ao MongoDB Atlas! Banco: {db.name}")
 except Exception as e:
     print(f"Erro ao conectar: {e}")
     db = None
 
-# Rota para listar todos os pagamentos
+# Rotas da API
 @app.route('/api/payments', methods=['GET'])
 def get_payments():
     if db is None:
         return jsonify({"error": "Database connection failed"}), 500
     
     try:
-        # Ordena por data de vencimento (os mais próximos primeiro)
         payments = list(db.payments.find().sort("dueDate", 1))
         return dumps(payments)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Rota para adicionar um novo pagamento/parcela
 @app.route('/api/payments', methods=['POST'])
 def add_payment():
     if db is None:
@@ -50,16 +59,12 @@ def add_payment():
         if not data:
             return jsonify({"error": "No data provided"}), 400
             
-        # Validação dos campos obrigatórios
         required_fields = ['description', 'value', 'dueDate', 'payer']
         for field in required_fields:
             if field not in data:
                 return jsonify({"error": f"Missing required field: {field}"}), 400
         
-        # Converte a string de data para objeto Date
         data['dueDate'] = datetime.strptime(data['dueDate'], "%Y-%m-%d")
-        
-        # Adiciona status padrão
         data['paid'] = False
         data['paymentDate'] = None
         
@@ -74,7 +79,6 @@ def add_payment():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Rota para marcar um pagamento como pago
 @app.route('/api/payments/<payment_id>/pay', methods=['PUT'])
 def mark_as_paid(payment_id):
     if db is None:
@@ -84,7 +88,6 @@ def mark_as_paid(payment_id):
         if not ObjectId.is_valid(payment_id):
             return jsonify({"error": "Invalid payment ID"}), 400
             
-        # Atualiza o documento marcando como pago e adiciona a data atual
         result = db.payments.update_one(
             {"_id": ObjectId(payment_id)},
             {
@@ -105,7 +108,6 @@ def mark_as_paid(payment_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Rota para editar um pagamento
 @app.route('/api/payments/<payment_id>', methods=['PUT'])
 def update_payment(payment_id):
     if db is None:
@@ -119,12 +121,10 @@ def update_payment(payment_id):
         if not data:
             return jsonify({"error": "No data provided"}), 400
             
-        # Remove campos que não devem ser atualizados
         data.pop('_id', None)
         data.pop('paid', None)
         data.pop('paymentDate', None)
         
-        # Se houver dueDate, converte para objeto Date
         if 'dueDate' in data:
             data['dueDate'] = datetime.strptime(data['dueDate'], "%Y-%m-%d")
         
@@ -145,7 +145,6 @@ def update_payment(payment_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Rota para excluir um pagamento
 @app.route('/api/payments/<payment_id>', methods=['DELETE'])
 def delete_payment(payment_id):
     if db is None:
@@ -167,5 +166,16 @@ def delete_payment(payment_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# Rotas para servir o frontend
+@app.route('/')
+def serve_frontend():
+    return send_from_directory('.', 'index.html')
+
+@app.route('/<path:path>')
+def serve_static(path):
+    return send_from_directory('.', path)
+
+# Configuração do servidor para produção
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
