@@ -23,7 +23,7 @@ CORS(app, resources={
 })
 
 # Configuração segura da conexão MongoDB
-MONGO_URI = os.getenv("MONGO_URI")
+MONGO_URI = os.getenv("MONGO_URI") + "?retryWrites=true&w=majority&tls=true&tlsAllowInvalidCertificates=true"
 if not MONGO_URI:
     raise ValueError("No MONGO_URI set for MongoDB connection")
 
