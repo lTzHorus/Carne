@@ -23,7 +23,7 @@ CORS(app, resources={
     }
 })
 
-# MongoDB Connection
+# Conexão com o MongoDB
 def get_mongo_client():
     MONGO_URI = os.getenv("MONGO_URI")
     if not MONGO_URI:
@@ -50,7 +50,7 @@ except Exception as e:
     print(f"Erro ao conectar ao MongoDB: {str(e)}")
     db = None
 
-# Helper functions
+# Funções auxiliares
 def validate_payment_data(data, partial_update=False):
     required_fields = ['description', 'value', 'dueDate', 'payer'] if not partial_update else []
     errors = {}
@@ -59,7 +59,7 @@ def validate_payment_data(data, partial_update=False):
         if field not in data or not data[field]:
             errors[field] = "Campo obrigatório"
     
-    if 'value' in data and (not isinstance(data['value'], (int, float)) or data['value'] <= 0:
+    if 'value' in data and (not isinstance(data['value'], (int, float)) or data['value'] <= 0):
         errors['value'] = "Valor deve ser um número positivo"
     
     if 'dueDate' in data:
