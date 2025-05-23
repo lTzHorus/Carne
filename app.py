@@ -5,42 +5,43 @@ from bson.json_util import dumps
 from bson.objectid import ObjectId
 from datetime import datetime
 import os
-from urllib.parse import quote_plus
+import ssl
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
 # Configuração do CORS para permitir acesso mobile
-CORS(app, resources={
-    r"/api/*": {
-        "origins": "*",  # Permitindo todas as origens
-        "methods": ["GET", "POST", "PUT", "DELETE"],
-        "allow_headers": ["Content-Type"],
-        "supports_credentials": True
-    }
-})
+CORS(app)
 
-# Configuração segura da conexão (use variáveis de ambiente)
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://leoimarques:nT8QO2rCaps1RzwL@cluster0.ji1shyl.mongodb.net/carne_astra?retryWrites=true&w=majority&appName=Cluster0")
+# Configuração segura da conexão com MongoDB Atlas
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://leoimarques:nT8QO2rCaps1RzwL@cluster0.ji1shyl.mongodb.net/carne_astra?retryWrites=true&w=majority")
 
 def get_mongo_client():
     if not MONGO_URI:
         raise ValueError("Variável MONGO_URI não configurada")
     
+    # Configuração de SSL customizada para o Render
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    
     connection_params = {
-        'retryWrites': 'true',
+        'ssl': True,
+        'ssl_cert_reqs': ssl.CERT_NONE,
+        'ssl_ca_certs': None,
+        'retryWrites': True,
         'w': 'majority',
-        'tls': 'true',
-        'tlsAllowInvalidCertificates': 'true',
-        'connectTimeoutMS': '30000',
-        'socketTimeoutMS': '30000',
-        'serverSelectionTimeoutMS': '30000'
+        'connectTimeoutMS': 30000,
+        'socketTimeoutMS': 30000,
+        'serverSelectionTimeoutMS': 30000,
+        'tlsAllowInvalidCertificates': True
     }
-    params_str = '&'.join([f"{k}={v}" for k, v in connection_params.items()])
-    return MongoClient(f"{MONGO_URI}&{params_str}")
+    
+    return MongoClient(MONGO_URI, **connection_params)
 
 try:
     client = get_mongo_client()
-    client.admin.command('ping')
+    # Teste de conexão simplificado
+    client.admin.command('ismaster')
     db = client.get_database('carne_astra')
     print(f"Conectado ao MongoDB! Banco: {db.name}")
 except Exception as e:
@@ -56,7 +57,7 @@ def validate_payment_data(data, partial_update=False):
         if field not in data or not data[field]:
             errors[field] = "Campo obrigatório"
     
-    if 'value' in data and (not isinstance(data['value'], (int, float)) or data['value'] <= 0):
+    if 'value' in data and (not isinstance(data['value'], (int, float)) or data['value'] <= 0:
         errors['value'] = "Valor deve ser um número positivo"
     
     if 'dueDate' in data:
@@ -242,5 +243,5 @@ def health_check():
 
 # Configuração do servidor para produção
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
