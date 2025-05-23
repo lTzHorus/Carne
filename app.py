@@ -16,9 +16,13 @@ app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app, resources={
     r"/api/*": {
         "origins": [
+            "https://seu-app.onrender.com",
             "http://localhost:*",
-            "https://*.onrender.com"
-        ]
+            "https://*",
+            "http://*"
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE"],
+        "allow_headers": ["*"]
     }
 })
 
