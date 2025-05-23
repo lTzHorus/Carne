@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Pagamentos</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { color: #333; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        .form-group { margin: 10px 0; }
+        button { padding: 8px 16px; color: white; border: none; cursor: pointer; margin: 2px; }
+        .btn-primary { background-color: #4CAF50; }
+        .btn-primary:hover { background-color: #45a049; }
+        .btn-secondary { background-color: #2196F3; }
+        .btn-secondary:hover { background-color: #0b7dda; }
+        .btn-danger { background-color: #f44336; }
+        .btn-danger:hover { background-color: #da190b; }
+        .paid { color: green; font-weight: bold; }
+        .pending { color: orange; font-weight: bold; }
+        .overdue { color: red; font-weight: bold; }
+        .status-badge {
+            padding: 3px 6px;
+            border-radius: 3px;
+            color: white;
+            font-size: 12px;
+        }
+        .status-paid { background-color: #4CAF50; }
+        .status-pending { background-color: #FFC107; color: black; }
+        .status-overdue { background-color: #F44336; }
+    </style>
+</head>
+<body>
+    <h1>Sistema de Pagamentos</h1>
+    
+    <h2>Adicionar Nova Parcela</h2>
+    <form id="addForm">
+        <div class="form-group">
+            <label for="description">Descrição:</label>
+            <input type="text" id="description" name="description" required>
+        </div>
+        <div class="form-group">
+            <label for="value">Valor:</label>
+            <input type="number" id="value" name="value" step="0.01" required>
+        </div>
+        <div class="form-group">
+            <label for="dueDate">Data de Vencimento:</label>
+            <input type="date" id="dueDate" name="dueDate" required>
+        </div>
+        <div class="form-group">
+            <label for="payer">Pagador:</label>
+            <input type="text" id="payer" name="payer" required>
+        </div>
+        <button type="submit" class="btn-primary">Adicionar Parcela</button>
+    </form>
+    
+    <h2>Parcelas</h2>
+    <button id="refreshBtn" class="btn-secondary">Atualizar Lista</button>
+    <table id="paymentsTable">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Descrição</th>
+                <th>Valor</th>
+                <th>Vencimento</th>
+                <th>Pagador</th>
+                <th>Status</th>
+                <th>Data Pagamento</th>
+                <th>Ações</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Carrega os pagamentos quando a página é aberta
+            fetchPayments();
+            
+            // Configura o evento de submit do formulário
+            document.getElementById('addForm').addEventListener('submit', (e) => {
+                e.preventDefault();
+                addPayment();
+            });
+            
+            // Configura o botão de atualizar
+            document.getElementById('refreshBtn').addEventListener('click', fetchPayments);
+        });
+
+        // Função para buscar pagamentos da API
+        async function fetchPayments() {
+            try {
+                const response = await fetch('http://localhost:5000/api/payments');
+                const payments = await response.json();
+                
+                const tbody = document.querySelector('#paymentsTable tbody');
+                tbody.innerHTML = '';
+                
+                payments.forEach(payment => {
+                    const row = document.createElement('tr');
+                    
+                    // Determina a classe de status
+                    let statusClass = '';
+                    let statusText = '';
+                    if (payment.paid) {
+                        statusClass = 'status-paid';
+                        statusText = 'PAGO';
+                    } else {
+                        const dueDate = new Date(payment.dueDate);
+                        const today = new Date();
+                        if (dueDate < today) {
+                            statusClass = 'status-overdue';
+                            statusText = 'VENCIDO';
+                        } else {
+                            statusClass = 'status-pending';
+                            statusText = 'PENDENTE';
+                        }
+                    }
+                    
+                    row.innerHTML = `
+                        <td>${payment._id.$oid}</td>
+                        <td>${payment.description || 'N/A'}</td>
+                        <td>R$ ${payment.value?.toFixed(2) || '0,00'}</td>
+                        <td>${new Date(payment.dueDate).toLocaleDateString('pt-BR')}</td>
+                        <td>${payment.payer || 'N/A'}</td>
+                        <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                        <td>${payment.paymentDate ? new Date(payment.paymentDate).toLocaleDateString('pt-BR') : '-'}</td>
+                        <td>
+                            ${!payment.paid ? 
+                                `<button class="btn-primary" onclick="markAsPaid('${payment._id.$oid}')">Marcar como Pago</button>` : 
+                                ''}
+                            <button class="btn-secondary" onclick="editPayment('${payment._id.$oid}')">Editar</button>
+                            <button class="btn-danger" onclick="deletePayment('${payment._id.$oid}')">Excluir</button>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (error) {
+                console.error('Erro ao buscar pagamentos:', error);
+                alert('Erro ao carregar pagamentos');
+            }
+        }
+
+        // Função para adicionar um novo pagamento
+        async function addPayment() {
+            const description = document.getElementById('description').value;
+            const value = parseFloat(document.getElementById('value').value);
+            const dueDate = document.getElementById('dueDate').value;
+            const payer = document.getElementById('payer').value;
+            
+            try {
+                const response = await fetch('http://localhost:5000/api/payments', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        description, 
+                        value, 
+                        dueDate, 
+                        payer,
+                        paid: false
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    alert('Parcela adicionada com sucesso!');
+                    document.getElementById('addForm').reset();
+                    fetchPayments(); // Atualiza a lista
+                } else {
+                    throw new Error(result.error || 'Erro desconhecido');
+                }
+            } catch (error) {
+                console.error('Erro ao adicionar parcela:', error);
+                alert('Erro ao adicionar parcela: ' + error.message);
+            }
+        }
+
+        // Função para marcar um pagamento como pago
+        async function markAsPaid(id) {
+            if (!confirm('Deseja realmente marcar esta parcela como paga?')) return;
+            
+            try {
+                const response = await fetch(`http://localhost:5000/api/payments/${id}/pay`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    alert('Parcela marcada como paga com sucesso!');
+                    fetchPayments(); // Atualiza a lista
+                } else {
+                    throw new Error(result.error || 'Erro desconhecido');
+                }
+            } catch (error) {
+                console.error('Erro ao marcar como pago:', error);
+                alert('Erro ao marcar como pago: ' + error.message);
+            }
+        }
+
+        // Função para editar um pagamento (simplificado)
+        async function editPayment(id) {
+            const newValue = prompt('Digite o novo valor:');
+            if (newValue === null) return;
+            
+            try {
+                const response = await fetch(`http://localhost:5000/api/payments/${id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ value: parseFloat(newValue) })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    alert('Parcela atualizada com sucesso!');
+                    fetchPayments(); // Atualiza a lista
+                } else {
+                    throw new Error(result.error || 'Erro desconhecido');
+                }
+            } catch (error) {
+                console.error('Erro ao editar parcela:', error);
+                alert('Erro ao editar parcela: ' + error.message);
+            }
+        }
+
+        // Função para excluir um pagamento
+        async function deletePayment(id) {
+            if (!confirm('Deseja realmente excluir esta parcela?')) return;
+            
+            try {
+                const response = await fetch(`http://localhost:5000/api/payments/${id}`, {
+                    method: 'DELETE'
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    alert('Parcela excluída com sucesso!');
+                    fetchPayments(); // Atualiza a lista
+                } else {
+                    throw new Error(result.error || 'Erro desconhecido');
+                }
+            } catch (error) {
+                console.error('Erro ao excluir parcela:', error);
+                alert('Erro ao excluir parcela: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
