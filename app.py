@@ -6,48 +6,39 @@ from bson.objectid import ObjectId
 from datetime import datetime
 import os
 from dotenv import load_dotenv
-from urllib.parse import quote_plus
 
-# Carrega variáveis do arquivo .env
+# Carregar variáveis do arquivo .env
 load_dotenv()
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
-# Configuração do CORS
+# Configuração do CORS (permitindo qualquer origem)
 CORS(app, resources={
     r"/api/*": {
-        "origins": os.getenv('ALLOWED_ORIGINS', '*').split(','),
+        "origins": "*",
         "methods": ["GET", "POST", "PUT", "DELETE"],
         "allow_headers": ["Content-Type"],
         "supports_credentials": True
     }
 })
 
+# Recupera a URI do MongoDB e o nome do banco de dados de variáveis de ambiente
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://leoimarques:nT8QO2rCaps1RzwL@cluster0.ji1shyl.mongodb.net/carne_astra?retryWrites=true&w=majority&appName=Cluster0")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "carne_astra")  # Nome do banco de dados, ajustável conforme necessário
+
 # Conexão com o MongoDB
 def get_mongo_client():
-    MONGO_URI = os.getenv("MONGO_URI")
-    if not MONGO_URI:
-        raise ValueError("Variável MONGO_URI não configurada")
-    
-    connection_params = {
-        'retryWrites': 'true',
-        'w': 'majority',
-        'tls': 'true',
-        'tlsAllowInvalidCertificates': 'true',
-        'connectTimeoutMS': '30000',
-        'socketTimeoutMS': '30000',
-        'serverSelectionTimeoutMS': '30000'
-    }
-    params_str = '&'.join([f"{k}={v}" for k, v in connection_params.items()])
-    return MongoClient(f"{MONGO_URI}?{params_str}")
+    try:
+        return MongoClient(MONGO_URI)
+    except Exception as e:
+        print(f"Erro ao conectar ao MongoDB: {str(e)}")
+        return None
 
-try:
-    client = get_mongo_client()
-    client.admin.command('ping')
-    db = client.get_database(os.getenv('MONGO_DB_NAME', 'carne_astra'))
+client = get_mongo_client()
+if client:
+    db = client.get_database(MONGO_DB_NAME)
     print(f"Conectado ao MongoDB! Banco: {db.name}")
-except Exception as e:
-    print(f"Erro ao conectar ao MongoDB: {str(e)}")
+else:
     db = None
 
 # Funções auxiliares
