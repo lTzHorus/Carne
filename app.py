@@ -35,6 +35,11 @@ def get_mongo_client():
 client = get_mongo_client()
 db = client.get_database(MONGO_DB_NAME) if client else None
 
+# Função para servir o frontend
+@app.route('/')
+def serve_frontend():
+    return send_from_directory('.', 'index.html')
+
 # Funções auxiliares
 def validate_payment_data(data, partial_update=False):
     required_fields = ['description', 'value', 'dueDate', 'payer'] if not partial_update else []
@@ -78,73 +83,6 @@ def get_payments():
         return dumps(payments)
     except Exception as e:
         app.logger.error(f"Erro ao buscar pagamentos: {str(e)}")
-        return jsonify({"error": "Erro interno ao processar a requisição"}), 500
-
-@app.route('/api/payments', methods=['POST'])
-def add_payment():
-    if db is None:
-        return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
-        
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Dados não fornecidos"}), 400
-        
-        if errors := validate_payment_data(data):
-            return jsonify({"error": "Dados inválidos", "details": errors}), 400
-        
-        payment_data = {
-            "description": data['description'],
-            "value": float(data['value']),
-            "dueDate": datetime.strptime(data['dueDate'], "%Y-%m-%d"),
-            "payer": data['payer'],
-            "paid": False,
-            "paymentDate": None,
-            "createdAt": datetime.now(),
-            "updatedAt": datetime.now()
-        }
-        
-        result = db.payments.insert_one(payment_data)
-        return jsonify({
-            "success": True,
-            "id": str(result.inserted_id),
-            "message": "Parcela adicionada com sucesso"
-        }), 201
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        app.logger.error(f"Erro ao adicionar parcela: {str(e)}")
-        return jsonify({"error": "Erro interno ao processar a requisição"}), 500
-
-@app.route('/api/payments/<payment_id>/pay', methods=['PUT'])
-def mark_as_paid(payment_id):
-    if db is None:
-        return jsonify({"error": "Conexão com o banco de dados falhou"}), 500
-        
-    try:
-        if not ObjectId.is_valid(payment_id):
-            return jsonify({"error": "ID de parcela inválido"}), 400
-            
-        result = db.payments.update_one(
-            {"_id": ObjectId(payment_id)},
-            {
-                "$set": {
-                    "paid": True,
-                    "paymentDate": datetime.now(),
-                    "updatedAt": datetime.now()
-                }
-            }
-        )
-        
-        if result.modified_count == 0:
-            return jsonify({"error": "Parcela não encontrada ou já está paga"}), 404
-            
-        return jsonify({
-            "success": True,
-            "message": "Parcela marcada como paga com sucesso"
-        })
-    except Exception as e:
-        app.logger.error(f"Erro ao marcar como pago: {str(e)}")
         return jsonify({"error": "Erro interno ao processar a requisição"}), 500
 
 # Outras rotas permanecem iguais...
